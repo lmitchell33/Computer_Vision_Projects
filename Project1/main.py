@@ -51,8 +51,10 @@ def apply_masks(frames, masks):
 
     return output
 
-def box_filter(frames,kernel):
+def box_filter(frames, size):
     sframes=[]
+    box_filter_size = size[0]
+    kernel = np.ones((box_filter_size,box_filter_size),np.float32)/(box_filter_size**2)
     for frame in frames:
         blur=cv2.filter2D(frame,-1,kernel)
         sframes.append(blur)
@@ -65,44 +67,41 @@ def gaussian(frames, std, size=(0,0)):
         sframes.append(blur)
     return  sframes
 
-def derivative_of_guassian(frames, temporal_kernel, t_sigma, threshold=0, use_gaussian=True, size=(3,3)):
-    """Derivative of Guassian filter. #1 in the different variations. (I think this is what it is asking for)"""
+def smooth_then_temporal(frames, temporal_kernel, threshold, s_sigma=0, use_box=True, size=(3,3)):
+    """#2 in the different variations. (I think this is what it is asking for)"""
     # apply guassian to smooth first then take the temporal derivative
-    if use_gaussian: 
-        smoothed_frames = gaussian(frames, t_sigma, size)
-        d_frames = temporal_derivative(smoothed_frames, temporal_kernel)    
+    if use_box: 
+        smoothed_frames = box_filter(frames, size)  
     else:
-        d_frames = temporal_derivative(frames, temporal_kernel)
+        smoothed_frames = gaussian(frames, s_sigma, size)
 
+    d_frames = temporal_derivative(smoothed_frames, temporal_kernel)
     masks = threshold_frames(d_frames, threshold)
     motion_frames = apply_masks(frames, masks)
     return motion_frames
 
 def main():
-    std=2.5
-    box_filter_size=5
-    kernel2 = np.ones((box_filter_size,box_filter_size),np.float32)/(box_filter_size**2)
-
-    frames = read_frames(OFFICE_IMAGES)
     #frames = box_filter(frames,kernel2)
     # frames = gaussian(frames, std)
     
+    frames = read_frames(OFFICE_IMAGES)
     temporal_kernel = 0.5 * np.array([-1, 0, 1])
-    t_sigmas = [0.10, 1, 5] # idk
+    s_sigmas = [0.10, 1, 5] # idk
     threshold = 10 # idk
-    size = (3, 3)
-    no_gaussian_outputs =  derivative_of_guassian(frames=frames, temporal_kernel=temporal_kernel, t_sigma=0, threshold=threshold, use_gaussian=False)
-    guass_outputs = [derivative_of_guassian(frames=frames, temporal_kernel=temporal_kernel, t_sigma=t_sigma, threshold=threshold, size=size) for t_sigma in t_sigmas]
+    sizes = [(3,3), (5,5)]
+    box_outputs =  [smooth_then_temporal(frames=frames, temporal_kernel=temporal_kernel, threshold=threshold, use_box=True, size=size) for size in sizes]
+    guass_outputs = [smooth_then_temporal(frames=frames, temporal_kernel=temporal_kernel, threshold=threshold, s_sigma=s_sigma, use_box=False, size=(3,3)) for s_sigma in s_sigmas]
 
-    for index in range(len(no_gaussian_outputs)):
+    for index in range(len(frames)):
         frame = frames[index]
-        no_gauss_frame = no_gaussian_outputs[index]
+        box_output_1 = box_outputs[0][index]
+        box_output_2 = box_outputs[1][index]
         gauss_0 = guass_outputs[0][index]
         gauss_1 = guass_outputs[1][index]
         gauss_2 = guass_outputs[2][index]
         
-        combined = np.hstack((frame, no_gauss_frame, gauss_0, gauss_1, gauss_2))
-        cv2.imshow(f"Original, No Smooth,  t_sigma={t_sigmas[0]}, t_sigma={t_sigmas[1]}, t_sigma={t_sigmas[2]}", combined)
+        combined = np.hstack((frame, box_output_1, box_output_2, gauss_0, gauss_1, gauss_2))
+        cv2.imshow(f"Original, box_size={sizes[0]}, box_size={sizes[1]} s_sigma={s_sigmas[0]}, s_sigma={s_sigmas[1]}, s_sigma={s_sigmas[2]}", combined)
         key = cv2.waitKey(30)
         if key == ord("q"):
             break
