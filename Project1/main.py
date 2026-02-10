@@ -27,7 +27,7 @@ def temporal_derivative(frames, kernel):
     # I am assuming that when the instructions say "temporal derivative" it just means this filter is applies to 
     # time adjacent frames instead of convoluting the pixels in the image (I very likely could be wrong tho)
     for i in range(1, len(frames)-1):
-        d_frame = sum([kernel[0]*frames[i-1], kernel[1]*frames[i], kernel[2]*frames[i+1]])
+        d_frame = (kernel[0]*frames[i-1] + kernel[1]*frames[i] + kernel[2]*frames[i+1])
         derivatives.append(d_frame)
 
     return derivatives
@@ -41,7 +41,8 @@ def apply_masks(frames, masks):
     """Applies the appropriate masks in the form of a bitwise AND. I am not really sure if this is how he wants the masks applied, but its how I did them in a class I took in undergrad"""
     output = []
     for frame, mask in zip(frames, masks):
-        result = frame.copy()
+        result = frame.copy() # you have add this line or else it will apply the mask to the original images stored in frames
+
         # NOTE: this basically converts the picture to black and white but imo it is easier to see the motion this way
         # we could get rid of the result[mask == 1] = 255 to keep the motion in the regular grayscale values idrc
         result[mask == 0] = 0
@@ -64,14 +65,18 @@ def gaussian(frames, std, size=(0,0)):
         sframes.append(blur)
     return  sframes
 
-def derivative_of_guassian(frames, temporal_kernel, t_sigma, threshold=0, size=(3,3)):
+def derivative_of_guassian(frames, temporal_kernel, t_sigma, threshold=0, use_gaussian=True, size=(3,3)):
     """Derivative of Guassian filter. #1 in the different variations. (I think this is what it is asking for)"""
     # apply guassian to smooth first then take the temporal derivative
-    smoothed_frames = gaussian(frames, t_sigma, size)
-    d_frames = temporal_derivative(smoothed_frames, temporal_kernel)    
+    if use_gaussian: 
+        smoothed_frames = gaussian(frames, t_sigma, size)
+        d_frames = temporal_derivative(smoothed_frames, temporal_kernel)    
+    else:
+        d_frames = temporal_derivative(frames, temporal_kernel)
+
     masks = threshold_frames(d_frames, threshold)
     motion_frames = apply_masks(frames, masks)
-    return motion_frames, masks
+    return motion_frames
 
 def main():
     std=2.5
@@ -83,15 +88,22 @@ def main():
     # frames = gaussian(frames, std)
     
     temporal_kernel = 0.5 * np.array([-1, 0, 1])
-    t_sigma = 0.15 # idk
-    threshold = 5 # idk
+    t_sigmas = [0.10, 1, 5] # idk
+    threshold = 10 # idk
     size = (3, 3)
-    output, masks = derivative_of_guassian(frames, temporal_kernel, t_sigma, threshold, size)
+    no_gaussian_outputs =  derivative_of_guassian(frames=frames, temporal_kernel=temporal_kernel, t_sigma=0, threshold=threshold, use_gaussian=False)
+    guass_outputs = [derivative_of_guassian(frames=frames, temporal_kernel=temporal_kernel, t_sigma=t_sigma, threshold=threshold, size=size) for t_sigma in t_sigmas]
 
-    for frame, mask, out in zip(frames, masks, output):
-        combined = np.hstack((frame, mask, out))
-        cv2.imshow("original frames, mask, motion frames", combined)
-        key = cv2.waitKey(10) # 10 ms
+    for index in range(len(no_gaussian_outputs)):
+        frame = frames[index]
+        no_gauss_frame = no_gaussian_outputs[index]
+        gauss_0 = guass_outputs[0][index]
+        gauss_1 = guass_outputs[1][index]
+        gauss_2 = guass_outputs[2][index]
+        
+        combined = np.hstack((frame, no_gauss_frame, gauss_0, gauss_1, gauss_2))
+        cv2.imshow(f"Original, No Smooth,  t_sigma={t_sigmas[0]}, t_sigma={t_sigmas[1]}, t_sigma={t_sigmas[2]}", combined)
+        key = cv2.waitKey(30)
         if key == ord("q"):
             break
 
