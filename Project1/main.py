@@ -32,9 +32,30 @@ def temporal_derivative(frames, kernel, std):
 
     return derivatives
 
+def box_filter(frames,kernel):
+    sframes=[]
+    for i in range(1, len(frames)-1):
+        blur=cv2.filter2D(frames[i],-1,kernel)
+        sframes.append(blur)
+    return sframes
+
+def gaussian(frames,std):
+    sframes=[]
+    for i in range(1, len(frames)-1):
+        blur=cv2.GaussianBlur(frames[i],(0,0),std)
+        sframes.append(blur)
+    return  sframes
+
 def main():
     kernel1 = 0.5 * np.array([-1, 0, 1])
+    
+    std=2.5
+    box_filter_size=5
+    kernel2 = np.ones((box_filter_size,box_filter_size),np.float32)/(box_filter_size**2)
+
     frames = read_frames(OFFICE_IMAGES)
+    #frames = box_filter(frames,kernel2)
+    frames = gaussian(frames, std)
     
     cv2.imshow("Test Image", frames[0])
     cv2.waitKey(0)
