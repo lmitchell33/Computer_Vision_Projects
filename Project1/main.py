@@ -24,11 +24,19 @@ def temporal_derivative(frames, kernel):
     """Applies a 1D differential operator and returns the temporal derivate. #2 in the breakdown of tasks"""
     derivatives = []
 
+    # basically just zero pad the temporal derivative
+    d_frame_1 = (kernel[1]*frames[0] - kernel[2]*frames[1])
+    derivatives.append(d_frame_1)
+
     # I am assuming that when the instructions say "temporal derivative" it just means this filter is applies to 
     # time adjacent frames instead of convoluting the pixels in the image (I very likely could be wrong tho)
     for i in range(1, len(frames)-1):
         d_frame = (kernel[0]*frames[i-1] + kernel[1]*frames[i] + kernel[2]*frames[i+1])
         derivatives.append(d_frame)
+
+    # end with zero padding again
+    d_frame_end = (kernel[0]*frames[-2] + kernel[1]*frames[-1])
+    derivatives.append(d_frame_end)
 
     return derivatives
 
