@@ -24,8 +24,8 @@ def temporal_derivative(frames, kernel):
     """Applies a 1D differential operator and returns the temporal derivate. #2 in the breakdown of tasks"""
     derivatives = []
 
-    # basically just zero pad the temporal derivative
-    d_frame_1 = (kernel[1]*frames[0] - kernel[2]*frames[1])
+    # basically just zero pad the temporal derivative ( I also assuming I just divide by)
+    d_frame_1 = (kernel[1]*frames[0] + kernel[2]*frames[1])
     derivatives.append(d_frame_1)
 
     # I am assuming that when the instructions say "temporal derivative" it just means this filter is applies to 
@@ -37,13 +37,23 @@ def temporal_derivative(frames, kernel):
     # end with zero padding again
     d_frame_end = (kernel[0]*frames[-2] + kernel[1]*frames[-1])
     derivatives.append(d_frame_end)
+    
+    # print(np.std(np.abs(derivatives)))
+    # print(np.mean(np.abs(derivatives)))
+    # print(f"test threshold: {np.mean(np.abs(derivatives)) + np.std(np.abs(derivatives))}")
 
+    # we purposefully do not type cast to uint8 here because leaving the prevision as floats seems to
+    # do an immensely better job at removing the noise in the final motion frames
+    # print(type(derivatives[0][0][0]))
+    
     return derivatives
 
 def threshold_frames(frames, threshold=0):
     """Thresholds the frames and creates a mask of 0 or 1s. #3 in teh breakdown of tasks"""
     # should create bitmasks of 0s and 1s based on threshold
-    return [(np.abs(frame) > threshold).astype(np.uint8) for frame in frames]
+    # return [(np.abs(frame) > frame).astype(np.uint8) for frame in frames]
+    return [(np.abs(frame) > find_good_threshold(frame)).astype(np.uint8) for frame in frames]
+
 
 def apply_masks(frames, masks):
     """Applies the appropriate masks in the form of a bitwise AND. I am not really sure if this is how he wants the masks applied, but its how I did them in a class I took in undergrad"""
@@ -51,13 +61,14 @@ def apply_masks(frames, masks):
     for frame, mask in zip(frames, masks):
         result = frame.copy() # you have add this line or else it will apply the mask to the original images stored in frames
 
-        # NOTE: this basically converts the picture to black and white but imo it is easier to see the motion this way
-        # we could get rid of the result[mask == 1] = 255 to keep the motion in the regular grayscale values idrc
         result[mask == 0] = 0
         result[mask == 1] = 255 
         output.append(result)
 
     return output
+
+def find_good_threshold(frame):
+    return np.mean(np.abs(frame)) + np.std(np.abs(frame))
 
 def box_filter(frames, size):
     sframes=[]
@@ -88,14 +99,13 @@ def smooth_then_temporal(frames, temporal_kernel, threshold, s_sigma=0, use_box=
     motion_frames = apply_masks(frames, masks)
     return motion_frames
 
-def main():
-    #frames = box_filter(frames,kernel2)
-    # frames = gaussian(frames, std)
-    
-    frames = read_frames(OFFICE_IMAGES)
-    temporal_kernel = 0.5 * np.array([-1, 0, 1])
+def main():    
+    # frames = read_frames(OFFICE_IMAGES)
+    # frames = read_frames(REDCHAIR_IMAGES)
+    frames = read_frames(ENTEREXIT_IMAGES)
+    temporal_kernel = (0.5 * np.array([-1, 0, 1]))
     s_sigmas = [0.10, 1, 5] # idk
-    threshold = 10 # idk
+    threshold = 7.774 # idk 
     sizes = [(3,3), (5,5)]
     box_outputs =  [smooth_then_temporal(frames=frames, temporal_kernel=temporal_kernel, threshold=threshold, use_box=True, size=size) for size in sizes]
     guass_outputs = [smooth_then_temporal(frames=frames, temporal_kernel=temporal_kernel, threshold=threshold, s_sigma=s_sigma, use_box=False, size=(3,3)) for s_sigma in s_sigmas]
@@ -104,11 +114,14 @@ def main():
         frame = frames[index]
         box_output_1 = box_outputs[0][index]
         box_output_2 = box_outputs[1][index]
+        box_filter_frames = np.hstack((frame, box_output_1, box_output_2))
+
         gauss_0 = guass_outputs[0][index]
         gauss_1 = guass_outputs[1][index]
         gauss_2 = guass_outputs[2][index]
-        
-        combined = np.hstack((frame, box_output_1, box_output_2, gauss_0, gauss_1, gauss_2))
+        guass_filter_frames = np.hstack((gauss_0, gauss_1, gauss_2))
+
+        combined = np.vstack((box_filter_frames, guass_filter_frames))
         cv2.imshow(f"Original, box_size={sizes[0]}, box_size={sizes[1]} s_sigma={s_sigmas[0]}, s_sigma={s_sigmas[1]}, s_sigma={s_sigmas[2]}", combined)
         key = cv2.waitKey(30)
         if key == ord("q"):
