@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 from pathlib import Path
+from scipy.ndimage import convolve1d
 
 # Im not entirely sure if these paths are what they are looking for or not. The directions say that we dont need to zip up the data
 # but to ensure the code calls the data files by the same names as the zip file. I am pretty sure this is what they mean but I am not sure.
@@ -59,7 +60,7 @@ def apply_masks(frames, masks):
     """Applies the appropriate masks in the form of a bitwise AND. I am not really sure if this is how he wants the masks applied, but its how I did them in a class I took in undergrad"""
     output = []
     for frame, mask in zip(frames, masks):
-        result = frame.copy() # you have add this line or else it will apply the mask to the original images stored in frames
+        result = np.copy(frame) # you have add this line or else it will apply the mask to the original images stored in frames
 
         result[mask == 0] = 0
         result[mask == 1] = 255 
@@ -99,16 +100,41 @@ def smooth_then_temporal(frames, temporal_kernel, threshold, s_sigma=0, use_box=
     motion_frames = apply_masks(frames, masks)
     return motion_frames
 
+def derivative_gaussian(frames, tsigma,threshold):
+    """Full pipeline of applying 1D Gaussian filter"""
+    #Auto calculate kernel size
+    ksize = int(6 * tsigma + 1)
+    if ksize % 2 == 0:
+        ksize += 1
+    #Build kernel
+    half = ksize // 2
+    x = np.arange(-half, half + 1, dtype=np.float64)
+    kernel = -x / (tsigma ** 2) * np.exp(-x ** 2 / (2 * tsigma ** 2))
+    kernel = kernel / np.sum(np.abs(kernel)) * 2
+
+    #Applies the filter i guess?
+    frames_array = np.array(frames, dtype=np.float64).copy()
+    result = convolve1d(frames_array, kernel, axis=0, mode='nearest')
+
+    #Apply masking
+    masks = threshold_frames(result, threshold)
+    motion_frames = apply_masks(frames, masks)  # Pass original list
+    return motion_frames
+
 def main():    
     # frames = read_frames(OFFICE_IMAGES)
     # frames = read_frames(REDCHAIR_IMAGES)
     frames = read_frames(ENTEREXIT_IMAGES)
+
     temporal_kernel = (0.5 * np.array([-1, 0, 1]))
-    s_sigmas = [0.10, 1, 5] # idk
+    s_sigmas = [0.30, 2, 10] # idk
+    t_sigmas = [0.30, 2, 10]
     threshold = 7.774 # idk 
     sizes = [(3,3), (5,5)]
+
     box_outputs =  [smooth_then_temporal(frames=frames, temporal_kernel=temporal_kernel, threshold=threshold, use_box=True, size=size) for size in sizes]
     guass_outputs = [smooth_then_temporal(frames=frames, temporal_kernel=temporal_kernel, threshold=threshold, s_sigma=s_sigma, use_box=False, size=(3,3)) for s_sigma in s_sigmas]
+    dog_outputs = [derivative_gaussian(frames=frames,tsigma=t_sigma,threshold=threshold) for t_sigma in t_sigmas]
 
     for index in range(len(frames)):
         frame = frames[index]
@@ -119,15 +145,21 @@ def main():
         gauss_0 = guass_outputs[0][index]
         gauss_1 = guass_outputs[1][index]
         gauss_2 = guass_outputs[2][index]
-        guass_filter_frames = np.hstack((gauss_0, gauss_1, gauss_2))
+        gauss_filter_frames = np.hstack((gauss_0, gauss_1, gauss_2))
 
-        combined = np.vstack((box_filter_frames, guass_filter_frames))
-        cv2.imshow(f"Original, box_size={sizes[0]}, box_size={sizes[1]} s_sigma={s_sigmas[0]}, s_sigma={s_sigmas[1]}, s_sigma={s_sigmas[2]}", combined)
+        dog_0 = dog_outputs[0][index]
+        dog_1 = dog_outputs[1][index]
+        dog_2 = dog_outputs[2][index]
+        dog_filter_frames = np.hstack((dog_0, dog_1, dog_2))
+
+
+        combined = np.vstack((box_filter_frames, gauss_filter_frames,dog_filter_frames))
+        cv2.imshow(f"Original, box_size={sizes[0]}, box_size={sizes[1]} s_sigma={s_sigmas[0]}, s_sigma={s_sigmas[1]}, s_sigma={s_sigmas[2]}, t_sigma={t_sigmas[0]},t_sigma={t_sigmas[1]},t_sigma={t_sigmas[2]},", combined)
         key = cv2.waitKey(30)
         if key == ord("q"):
             break
 
     cv2.destroyAllWindows()
-
+    
 if __name__ == "__main__":
     main()
