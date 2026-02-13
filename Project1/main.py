@@ -141,7 +141,7 @@ def smooth_then_temporal(frames, temporal_kernel, threshold=None, s_sigma=0, use
 
 
 def guass_experiment(frames, s_sigmas, sizes, temporal_kernel):
-    
+    # this should be formatted as a list of three lists which contain the frames from each indiviual sizes or sigmas
     title = "Original |"
     box_outputs =  [smooth_then_temporal(frames=frames, temporal_kernel=temporal_kernel, use_box=True, size=size) for size in sizes]
     title += "| ".join([f"size = {size}" for size in sizes])
@@ -165,7 +165,7 @@ def guass_experiment(frames, s_sigmas, sizes, temporal_kernel):
 
 def find_good_threshold(frame, n=3):
     """#3 in the different variations"""
-    # 1 std away is little low and keeps way too much noise but 2 and 3 both seem decent but 3 is the best in my opionin  
+    # 1 std away is little low and keeps way too much noise but 2 and 3 both seem good but 3 is the best in my opionin  
     return n*np.std(frame)
 
 def thresholds_experiment(frames, fixed_thresholds, n_vals, temporal_kernel):
