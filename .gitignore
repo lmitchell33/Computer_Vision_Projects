@@ -5,6 +5,8 @@ __pycache__/
 
 # name for my venv
 CV/*
+Visual_odom/KITTI/*
+Visual_odom/EuRoC/*
 
 # C extensions
 *.so
