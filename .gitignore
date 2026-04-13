@@ -7,6 +7,7 @@ __pycache__/
 CV/*
 Visual_odom/KITTI/*
 Visual_odom/EuRoC/*
+Project2/*
 
 # C extensions
 *.so
