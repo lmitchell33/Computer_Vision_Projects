@@ -8,6 +8,7 @@ CV/*
 Visual_odom/KITTI/*
 Visual_odom/EuRoC/*
 Project2/*
+Project2_Smaller/*
 
 # C extensions
 *.so

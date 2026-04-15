@@ -2,6 +2,7 @@ import cv2
 from pathlib import Path
 import numpy as np
 import time
+import matplotlib.pyplot as plt
 
 """
 I think there are a couple of things to note/keep track of about about the KITTI dataset. Firstly, there are 22 total image/calibration 
@@ -68,6 +69,33 @@ def load_calibration(calibration_file):
 
     return left_intrinsic, right_intrinsic, abs(baseline_distance)
 
+def plot_poses(ground_truth_poses, estimated_poses):
+    x_gt_data = [p[0][3] for p in ground_truth_poses]
+    # y_gt_data = [p[1][3] for p in ground_truth_poses]
+    z_gt_data = [p[2][3] for p in ground_truth_poses]
+
+    # turns out, when plotting the ground truth, you have to plot the x-z data not the x-y data (I tried and it
+    # just does not match the video recording). I believe it is because the coord sys for the point gray flea 2 
+    # video cameras at this URL: https://www.cvlibs.net/datasets/kitti/setup.php has the y axis pointing down
+    # and the X-Z axes pointing outwards with the Z-axis pointing forward and the x axis pointing left-right
+    plt.figure()
+    plt.plot(x_gt_data, z_gt_data, label="ground truth", color="b")
+    plt.scatter(x_gt_data[0], z_gt_data[0], color="green", marker="o", s=100, label='start')
+    plt.scatter(x_gt_data[-1], z_gt_data[-1], color="red", marker="x", s=100, label='end')
+    plt.legend()
+    plt.xlabel("x (m)")
+    plt.ylabel("z (m)")
+    plt.title("Actual and Estimated Trajectories")
+    plt.tight_layout()
+    plt.show()
+
+def display_features(frame, features, widnow_name):
+    featured_image = cv2.drawKeypoints(frame, features, None)
+    combined_images = np.hstack((cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR), featured_image))
+    cv2.imshow("base image and base image with keypoints", combined_images)
+    key = cv2.waitKey(5) # they used 10 hz to 0.1 second = 100 ms
+    return key == ord('q')
+
 def get_features(image, algorithm="orb", threshold_scale=0.01):
     # NOTE: this page is awesome https://docs.opencv.org/4.x/db/d27/tutorial_py_table_of_contents_feature2d.html
     curr_time = time.time()
@@ -76,7 +104,9 @@ def get_features(image, algorithm="orb", threshold_scale=0.01):
     if algorithm == "orb":
         orb = cv2.ORB.create(nfeatures=1000)
         keypoints = orb.detect(image)
-        # keypoints, descriptor = orb.compute(image, keypoints)
+        time_diff = time.time() - curr_time
+
+        keypoints, descriptor = orb.compute(image, keypoints)
 
     elif algorithm == "harris":
         # the ORB and sift detectors both output a KeyPoint object so just for
@@ -85,16 +115,18 @@ def get_features(image, algorithm="orb", threshold_scale=0.01):
         corner_mask = response_map > (threshold_scale*response_map.max())
         corner_coords_y, corner_coords_x = np.where(corner_mask == True)
         keypoints = [cv2.KeyPoint(float(x), float(y), 3) for y, x in zip(corner_coords_y, corner_coords_x)]
+        time_diff = time.time() - curr_time
 
     elif algorithm == "sift":
         sift = cv2.SIFT.create()
         keypoints = sift.detect(image, None)
-        # keypoints, descriptor = sift.compute(image, keypoints)
+        time_diff = time.time() - curr_time
+
+        keypoints, descriptor = sift.compute(image, keypoints)
 
     else:
         raise Exception("Invalid algorithm argument")
     
-    time_diff = time.time() - curr_time
     return keypoints, descriptor, time_diff
 
 def match_features(algorithm="orb"):
@@ -103,10 +135,9 @@ def match_features(algorithm="orb"):
 def estimate_pose():
     pass
 
-def visual_odometry(left_images, right_images, time, ground_truth):
+def visual_odometry(left_images, right_images, ground_truth_poses, window_name, feature_algorithm="orb"):
     feature_detection_time = []
     feature_count = []
-    feature_algorithm = "orb"
 
     prev_features, prev_descriptor, detect_time = get_features(left_images[0], feature_algorithm)
     feature_detection_time.append(detect_time)
@@ -116,6 +147,10 @@ def visual_odometry(left_images, right_images, time, ground_truth):
         curr_features, curr_descriptor, detect_time = get_features(curr_frame, feature_algorithm)
         feature_detection_time.append(detect_time)
         feature_count.append(len(curr_features))
+
+        exit = display_features(curr_frame, curr_features, window_name)
+        if exit: 
+            break
 
         # do the feature matching/outlier removal here
         # match_features()
@@ -128,6 +163,7 @@ def visual_odometry(left_images, right_images, time, ground_truth):
         prev_descriptor = curr_descriptor
 
     # plot the ground truth with estimated trajectory and print out any stats here
+    plot_poses(ground_truth_poses, None)
     print(f"Average time to detect features for {feature_algorithm}: {round(np.mean(feature_detection_time), 5)} seconds")
     print(f"Average number of features detected for {feature_algorithm}: {int(np.mean(feature_count))}")
 
@@ -140,59 +176,31 @@ def main():
 
     kitti_calibration = KITTI_IMAGES_BASE_DIR / f"{sequence_num}/calib.txt"
     left_intrinsic, right_intrinsic, baseline = load_calibration(kitti_calibration)
-    print(f"Left intrinsic matrix for sequences {sequence_num}: \n {left_intrinsic}")
-    print(f"Right intrinsic matrix for sequence {sequence_num}: \n {right_intrinsic}")
-    print(" ")
-
-    kitti_time = KITTI_IMAGES_BASE_DIR / f"{sequence_num}/times.txt"
-    timestamps = load_times(kitti_time)
-    print(f"Timestamps (first 10) for sequence {sequence_num}: \n {timestamps[0:10]}")
+    print(f"Left intrinsic matrix for sequences {sequence_num}: \n {left_intrinsic} \n")
+    print(f"Right intrinsic matrix for sequence {sequence_num}: \n {right_intrinsic} \n")
+    print(f"Baseline between left and right camera: {baseline}")
     print(" ")
 
     kitti_ground_truth = KITTI_GROUND_TRUTH_BASE_DIR / f"{sequence_num}.txt"
     ground_truth = load_ground_truth(kitti_ground_truth)
-    print(f"Ground truth (first 3) for sequence {sequence_num}: \n {ground_truth[0:3]}")
-    print(" ")
 
     left_frames = read_frames(kitti_left_images)
     # right_frames = read_frames(kitti_right_images)
 
-    print(f"Number of timestamps == number of images: {len(timestamps)==len(left_frames)}")
-    print(f"Number of timestamps == number of ground truth poses: {len(timestamps)==len(ground_truth)}")
-    print(" ")
-
     # the frames are super super long so in order to make them fit on one screen (and for the report) I had to resize it
-    cv2.namedWindow("base image and base image with keypoints", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("base image and base image with keypoints", 1600, 400)
+    window_name = "base image and base image with keypoints"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, 1600, 400)
 
-    feature_detection_time = []
-    feature_count = []
-    images_to_show = None
     feature_algorithm = "harris"
-    
-    for frame in left_frames:
-        features, descriptor, time_diff = get_features(frame, algorithm=feature_algorithm)
-        feature_detection_time.append(time_diff)
-        feature_count.append(len(features))
 
-        featured_image = cv2.drawKeypoints(frame, features, None)
-        images_to_show = (cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR), featured_image)
-
-        combined_images = np.hstack((cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR), featured_image))
-        cv2.imshow("base image and base image with keypoints", combined_images)
-        key = cv2.waitKey(5) # they used 10 hz to 0.1 second = 100 ms
-        if key == ord("q"):
-            break
-
-    print(f"Average time to detect features for {feature_algorithm}: {round(np.mean(feature_detection_time)*1000, 5)} ms")
-    print(f"Average number of features detected for {feature_algorithm}: {int(np.mean(feature_count))}")
-
-    # for the report, just show the last frame with and without keypoints so we can grab a ss (vstack is easier to get the image(s)
-    combined_images = np.hstack(images_to_show)
-    cv2.imshow("base image and base image with keypoints", combined_images)
-    cv2.waitKey(0)
-
-    # visual_odometry(left_frames, right_frames)
+    visual_odometry(
+        left_images=left_frames, 
+        right_images=None, 
+        ground_truth_poses=ground_truth, 
+        window_name=window_name, 
+        feature_algorithm=feature_algorithm
+    )
 
 if __name__ == "__main__":
     main()
