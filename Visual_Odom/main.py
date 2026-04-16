@@ -89,18 +89,27 @@ def plot_poses(ground_truth_poses, estimated_poses):
     plt.tight_layout()
     plt.show()
 
-def display_features(frame, features, widnow_name):
+def display_features(frame, features):
+    cv2.namedWindow("features", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("features", 1600, 400)
     featured_image = cv2.drawKeypoints(frame, features, None)
     combined_images = np.hstack((cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR), featured_image))
-    cv2.imshow("base image and base image with keypoints", combined_images)
-    key = cv2.waitKey(5) # they used 10 hz to 0.1 second = 100 ms
+    cv2.imshow("features", combined_images)
+    key = cv2.waitKey(10) # they used 10 hz to 0.1 second = 100 ms (I want to go faster bc it takes too long for testing)
     return key == ord('q')
+
+def display_matches(prev_frame, prev_features, curr_frame, curr_features, matches):
+    cv2.namedWindow("matches", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("matches", 1600, 400)
+    matched_image = cv2.drawMatches(prev_frame, prev_features, curr_frame, curr_features, matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+    cv2.imshow("matches", matched_image)
+    key = cv2.waitKey(10)
+    return key == ord("q")
 
 def get_features(image, algorithm="orb", threshold_scale=0.01):
     # NOTE: this page is awesome https://docs.opencv.org/4.x/db/d27/tutorial_py_table_of_contents_feature2d.html
     curr_time = time.time()
 
-    descriptor = None
     if algorithm == "orb":
         orb = cv2.ORB.create(nfeatures=1000)
         keypoints = orb.detect(image)
@@ -114,7 +123,10 @@ def get_features(image, algorithm="orb", threshold_scale=0.01):
         response_map = cv2.cornerHarris(np.float32(image), 3, 3, 0.04)
         corner_mask = response_map > (threshold_scale*response_map.max())
         corner_coords_y, corner_coords_x = np.where(corner_mask == True)
+        
         keypoints = [cv2.KeyPoint(float(x), float(y), 3) for y, x in zip(corner_coords_y, corner_coords_x)]
+        descriptor = None
+
         time_diff = time.time() - curr_time
 
     elif algorithm == "sift":
@@ -129,31 +141,65 @@ def get_features(image, algorithm="orb", threshold_scale=0.01):
     
     return keypoints, descriptor, time_diff
 
-def match_features(algorithm="orb"):
+def match_features_brute_force(prev_descriptor, curr_descriptor, algorithm="orb"):
+    # https://docs.opencv.org/4.x/dc/dc3/tutorial_py_matcher.html
+
+    if algorithm == "orb":
+        bf_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        matches = bf_matcher.match(prev_descriptor, curr_descriptor)
+
+    elif algorithm == "sift":
+        bf_matcher = cv2.BFMatcher(cv2.NORM_L2)
+        matches = bf_matcher.knnMatch(prev_descriptor, curr_descriptor, k=2)
+
+        # ratio test between two nearest neighbors (k=2) with threshold of 0.5
+        good = []
+        for m, n in matches:
+            if m.distance < (0.50 * n.distance):
+                good.append(m)
+
+        matches = good
+ 
+    prev_matched_indicies = [point.trainIdx for point in matches]
+    curr_matched_indicies = [point.queryIdx for point in matches]
+
+    return prev_matched_indicies, curr_matched_indicies, matches
+
+def match_features_optical_flow(prev_frame, curr_frame, prev_features, ):
+    # I guess this would technically be feature tracking but the output would be roughly the same.
+    # TODO: this whole thing later or just remove it
+    p1, st, err = cv2.calcOpticalFlowPyrLK(prev_frame, curr_frame, prev_features, None)
     pass
 
 def estimate_pose():
     pass
 
-def visual_odometry(left_images, right_images, ground_truth_poses, window_name, feature_algorithm="orb"):
+def visual_odometry(left_images, right_images, ground_truth_poses, feature_algorithm="orb"):
     feature_detection_time = []
     feature_count = []
 
     prev_features, prev_descriptor, detect_time = get_features(left_images[0], feature_algorithm)
+    prev_frame = left_images[0]
     feature_detection_time.append(detect_time)
     feature_count.append(len(prev_features))
     for i in range(1, len(left_images)):
         curr_frame = left_images[i]
+
         curr_features, curr_descriptor, detect_time = get_features(curr_frame, feature_algorithm)
         feature_detection_time.append(detect_time)
         feature_count.append(len(curr_features))
-
-        exit = display_features(curr_frame, curr_features, window_name)
+        exit = display_features(curr_frame, curr_features)
         if exit: 
             break
 
-        # do the feature matching/outlier removal here
-        # match_features()
+        prev_indicies, curr_indicies, matches = match_features_brute_force( prev_descriptor, curr_descriptor, feature_algorithm)
+        # match_features_optical_flow(prev_frame, curr_frame, prev_features)
+        exit = display_matches(prev_frame, prev_features, curr_frame, curr_features, matches[:20])
+        if exit:
+            break
+
+        # TODO: RANSAC/outlier removal. Based on some research I think this actually takes place like after/during the pose estimation step,
+        # but it uses the feature matching data as the randoms subset? I think?
 
         # pose estimation
         # estimate_pose()
@@ -161,6 +207,7 @@ def visual_odometry(left_images, right_images, ground_truth_poses, window_name, 
         # update
         prev_features = curr_features
         prev_descriptor = curr_descriptor
+        prev_frame = curr_frame
 
     # plot the ground truth with estimated trajectory and print out any stats here
     plot_poses(ground_truth_poses, None)
@@ -187,18 +234,12 @@ def main():
     left_frames = read_frames(kitti_left_images)
     # right_frames = read_frames(kitti_right_images)
 
-    # the frames are super super long so in order to make them fit on one screen (and for the report) I had to resize it
-    window_name = "base image and base image with keypoints"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_name, 1600, 400)
-
-    feature_algorithm = "harris"
+    feature_algorithm = "sift"
 
     visual_odometry(
         left_images=left_frames, 
         right_images=None, 
         ground_truth_poses=ground_truth, 
-        window_name=window_name, 
         feature_algorithm=feature_algorithm
     )
 
