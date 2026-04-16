@@ -85,7 +85,7 @@ def plot_poses(ground_truth_poses, estimated_poses):
     plt.legend()
     plt.xlabel("x (m)")
     plt.ylabel("z (m)")
-    plt.title("Actual and Estimated Trajectories")
+    plt.title("Trajectories")
     plt.tight_layout()
     plt.show()
 
@@ -123,11 +123,10 @@ def get_features(image, algorithm="orb", threshold_scale=0.01):
         response_map = cv2.cornerHarris(np.float32(image), 3, 3, 0.04)
         corner_mask = response_map > (threshold_scale*response_map.max())
         corner_coords_y, corner_coords_x = np.where(corner_mask == True)
-        
+        time_diff = time.time() - curr_time
+
         keypoints = [cv2.KeyPoint(float(x), float(y), 3) for y, x in zip(corner_coords_y, corner_coords_x)]
         descriptor = None
-
-        time_diff = time.time() - curr_time
 
     elif algorithm == "sift":
         sift = cv2.SIFT.create()
@@ -143,6 +142,7 @@ def get_features(image, algorithm="orb", threshold_scale=0.01):
 
 def match_features_brute_force(prev_descriptor, curr_descriptor, algorithm="orb"):
     # https://docs.opencv.org/4.x/dc/dc3/tutorial_py_matcher.html
+    curr_time = time.time()
 
     if algorithm == "orb":
         bf_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
@@ -152,18 +152,20 @@ def match_features_brute_force(prev_descriptor, curr_descriptor, algorithm="orb"
         bf_matcher = cv2.BFMatcher(cv2.NORM_L2)
         matches = bf_matcher.knnMatch(prev_descriptor, curr_descriptor, k=2)
 
-        # ratio test between two nearest neighbors (k=2) with threshold of 0.5
+        # ratio test between two nearest neighbors (k=2) with threshold of 0.75
         good = []
         for m, n in matches:
-            if m.distance < (0.50 * n.distance):
+            if m.distance < (0.75 * n.distance):
                 good.append(m)
 
         matches = good
  
-    prev_matched_indicies = [point.trainIdx for point in matches]
-    curr_matched_indicies = [point.queryIdx for point in matches]
+    time_diff = time.time() - curr_time
 
-    return prev_matched_indicies, curr_matched_indicies, matches
+    prev_matched_indicies = [point.queryIdx for point in matches]
+    curr_matched_indicies = [point.trainIdx for point in matches]
+
+    return prev_matched_indicies, curr_matched_indicies, matches, time_diff
 
 def match_features_optical_flow(prev_frame, curr_frame, prev_features, ):
     # I guess this would technically be feature tracking but the output would be roughly the same.
@@ -178,10 +180,14 @@ def visual_odometry(left_images, right_images, ground_truth_poses, feature_algor
     feature_detection_time = []
     feature_count = []
 
+    match_time = []
+    match_count = []
+
     prev_features, prev_descriptor, detect_time = get_features(left_images[0], feature_algorithm)
     prev_frame = left_images[0]
     feature_detection_time.append(detect_time)
     feature_count.append(len(prev_features))
+
     for i in range(1, len(left_images)):
         curr_frame = left_images[i]
 
@@ -192,9 +198,11 @@ def visual_odometry(left_images, right_images, ground_truth_poses, feature_algor
         if exit: 
             break
 
-        prev_indicies, curr_indicies, matches = match_features_brute_force( prev_descriptor, curr_descriptor, feature_algorithm)
+        prev_indicies, curr_indicies, matches, match_time_diff = match_features_brute_force( prev_descriptor, curr_descriptor, feature_algorithm)
         # match_features_optical_flow(prev_frame, curr_frame, prev_features)
-        exit = display_matches(prev_frame, prev_features, curr_frame, curr_features, matches[:20])
+        match_time.append(match_time_diff)
+        match_count.append(len(matches))
+        exit = display_matches(prev_frame, prev_features, curr_frame, curr_features, matches[:30])
         if exit:
             break
 
@@ -211,8 +219,14 @@ def visual_odometry(left_images, right_images, ground_truth_poses, feature_algor
 
     # plot the ground truth with estimated trajectory and print out any stats here
     plot_poses(ground_truth_poses, None)
-    print(f"Average time to detect features for {feature_algorithm}: {round(np.mean(feature_detection_time), 5)} seconds")
+    print("Feature detection stats: ")
+    print(f"Average time to detect features for {feature_algorithm}: {round(np.mean(feature_detection_time), 5)*1000} ms")
     print(f"Average number of features detected for {feature_algorithm}: {int(np.mean(feature_count))}")
+
+    print(" ")
+    print("Feature matching stats: ")
+    print(f"Average time to match features for {feature_algorithm}: {round(np.mean(match_time), 5)*1000} ms")
+    print(f"Average number of matches for {feature_algorithm}: {int(np.mean(match_count))}")
 
 def main():
     # 00, 03, 05, 06, 07, 08, 09, and 10 all have fairly stationary scenes
@@ -234,7 +248,7 @@ def main():
     left_frames = read_frames(kitti_left_images)
     # right_frames = read_frames(kitti_right_images)
 
-    feature_algorithm = "sift"
+    feature_algorithm = "orb"
 
     visual_odometry(
         left_images=left_frames, 
