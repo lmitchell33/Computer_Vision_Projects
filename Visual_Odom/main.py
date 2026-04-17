@@ -62,17 +62,25 @@ def load_calibration(calibration_file):
         left_mat.append(left_row)
         right_mat.append(right_row)
 
+    #3x4 projection matrices for triangulation
+    proj_left = np.array(p0, dtype=np.float64).reshape(3, 4)
+    proj_right = np.array(p1, dtype=np.float64).reshape(3, 4)
+
     # intrinsic matrices = the 3x3 top left box. Base line calculation from here: https://medium.com/@jaimin-k/exploring-kitti-visual-ododmetry-dataset-8ac588246cdc
     left_intrinsic = np.array(left_mat)[0:3, 0:3]
     right_intrinsic = np.array(right_mat)[0:3, 0:3]
     baseline_distance = (left_mat[0][3] - right_mat[0][3]) / left_mat[0][0]
 
-    return left_intrinsic, right_intrinsic, abs(baseline_distance)
+    return left_intrinsic, right_intrinsic, abs(baseline_distance),proj_left,proj_right
 
 def plot_poses(ground_truth_poses, estimated_poses):
     x_gt_data = [p[0][3] for p in ground_truth_poses]
     # y_gt_data = [p[1][3] for p in ground_truth_poses]
     z_gt_data = [p[2][3] for p in ground_truth_poses]
+
+    x_est_data = [p[0][3] for p in estimated_poses]
+    #y_est_data = [p[1][3] for p in estimated_poses]
+    z_est_data = [p[2][3] for p in estimated_poses]
 
     # turns out, when plotting the ground truth, you have to plot the x-z data not the x-y data (I tried and it
     # just does not match the video recording). I believe it is because the coord sys for the point gray flea 2 
@@ -80,8 +88,10 @@ def plot_poses(ground_truth_poses, estimated_poses):
     # and the X-Z axes pointing outwards with the Z-axis pointing forward and the x axis pointing left-right
     plt.figure()
     plt.plot(x_gt_data, z_gt_data, label="ground truth", color="b")
+    plt.plot(x_est_data, z_est_data, label="VO estimation", color="r")
     plt.scatter(x_gt_data[0], z_gt_data[0], color="green", marker="o", s=100, label='start')
-    plt.scatter(x_gt_data[-1], z_gt_data[-1], color="red", marker="x", s=100, label='end')
+    plt.scatter(x_gt_data[-1], z_gt_data[-1], color="red", marker="x", s=100, label='GT end')
+    plt.scatter(x_est_data[-1], z_est_data[-1], color="green", marker="x", s=100, label='estimate end')
     plt.legend()
     plt.xlabel("x (m)")
     plt.ylabel("z (m)")
@@ -173,15 +183,78 @@ def match_features_optical_flow(prev_frame, curr_frame, prev_features, ):
     p1, st, err = cv2.calcOpticalFlowPyrLK(prev_frame, curr_frame, prev_features, None)
     pass
 
-def estimate_pose():
-    pass
 
-def visual_odometry(left_images, right_images, ground_truth_poses, feature_algorithm="orb"):
+
+def match_stereo_features(left_frame, right_frame, left_keypoints, left_descriptor, algorithm="orb"):
+    """Match features between left and right images at the same timestep."""
+    right_keypoints, right_descriptor, _ = get_features(right_frame, algorithm)
+    _, _, matches, _ = match_features_brute_force(left_descriptor, right_descriptor, algorithm)
+
+    left_pts = np.float64([left_keypoints[m.queryIdx].pt for m in matches])
+    right_pts = np.float64([right_keypoints[m.trainIdx].pt for m in matches])
+    left_indices = [m.queryIdx for m in matches]
+
+    return left_pts, right_pts, left_indices
+
+def common_matched_features(prev_indices, curr_indices,curr_features,stereo_left_pts,stereo_right_pts, stereo_left_indices):
+        temporal_map = {p: c for p, c in zip(prev_indices, curr_indices)}
+        common_stereo_pts_left = []
+        common_stereo_pts_right = []
+        common_curr_pts = []
+
+        for idx, stereo_idx in enumerate(stereo_left_indices):
+            if stereo_idx in temporal_map:
+                common_stereo_pts_left.append(stereo_left_pts[idx])
+                common_stereo_pts_right.append(stereo_right_pts[idx])
+                curr_feat_idx = temporal_map[stereo_idx]
+                common_curr_pts.append(curr_features[curr_feat_idx].pt)
+
+        common_stereo_pts_left = np.float64(common_stereo_pts_left)
+        common_stereo_pts_right = np.float64(common_stereo_pts_right)
+        common_curr_pts = np.float64(common_curr_pts)
+        return common_stereo_pts_left,common_stereo_pts_right,common_curr_pts
+
+
+def triangulate_points(left_pts, right_pts, proj_left, proj_right):
+    """Triangulate 3D points from stereo correspondences."""
+    # cv2.triangulatePoints expects 2xN arrays
+    pts_4d = cv2.triangulatePoints(proj_left, proj_right, left_pts.T, right_pts.T)
+
+    # Convert from homogeneous (4D) to 3D by dividing by w
+    pts_3d = (pts_4d[:3] / pts_4d[3]).T  # Nx3
+
+    # Filter out points with negative depth or very far away points
+    valid = (pts_3d[:, 2] > 0) & (pts_3d[:, 2] < 200)
+    return pts_3d, valid
+
+
+def estimate_pose_pnp(pts_3d, pts_2d, intrinsic_matrix):
+    """Estimate camera pose from 3D-2D correspondences using PnP + RANSAC."""
+    success, rvec, tvec, inliers = cv2.solvePnPRansac(
+        pts_3d, pts_2d, intrinsic_matrix, 
+        distCoeffs=None,
+        iterationsCount=500,
+        reprojectionError=1.0,
+        flags=cv2.SOLVEPNP_ITERATIVE
+    )
+
+    if not success:
+        return None, None
+
+    R, _ = cv2.Rodrigues(rvec)  # convert rotation vector to matrix
+    t = tvec.flatten()
+
+    return R, t
+
+def visual_odometry(left_images, right_images, left_intrinsic, proj_left, proj_right, ground_truth_poses, feature_algorithm="orb"):
     feature_detection_time = []
     feature_count = []
 
     match_time = []
     match_count = []
+
+    current_pose = np.eye(4)
+    estimated_poses = [current_pose[:3, :].copy()]
 
     prev_features, prev_descriptor, detect_time = get_features(left_images[0], feature_algorithm)
     prev_frame = left_images[0]
@@ -205,12 +278,28 @@ def visual_odometry(left_images, right_images, ground_truth_poses, feature_algor
         exit = display_matches(prev_frame, prev_features, curr_frame, curr_features, matches[:30])
         if exit:
             break
+        
+        # Match left[k-1] <-> right[k-1]     
+        stereo_left_pts, stereo_right_pts, stereo_left_indices = match_stereo_features(prev_frame, right_images[i - 1], prev_features, prev_descriptor, feature_algorithm)
 
-        # TODO: RANSAC/outlier removal. Based on some research I think this actually takes place like after/during the pose estimation step,
-        # but it uses the feature matching data as the randoms subset? I think?
+        #Find features with both temporal and spatial matches
+        #stereo_set = set(stereo_left_indices)
+        common_stereo_pts_left,common_stereo_pts_right,common_curr_pts=common_matched_features(prev_indicies, curr_indicies,curr_features,stereo_left_pts,stereo_right_pts, stereo_left_indices)
 
-        # pose estimation
-        # estimate_pose()
+        #Get 3D Points
+        pts_3d, valid = triangulate_points(common_stereo_pts_left, common_stereo_pts_right, proj_left, proj_right)
+
+        R, t = estimate_pose_pnp(pts_3d, common_curr_pts, left_intrinsic)
+
+        if R is not None:
+            # PnP gives us the transform FROM world TO camera, so the world frame is the inverse
+            T = np.eye(4)
+            T[:3, :3] = R.T
+            T[:3, 3] = -R.T @ t
+            current_pose = current_pose @ T
+        
+        estimated_poses.append(current_pose[:3, :].copy())
+
 
         # update
         prev_features = curr_features
@@ -218,7 +307,7 @@ def visual_odometry(left_images, right_images, ground_truth_poses, feature_algor
         prev_frame = curr_frame
 
     # plot the ground truth with estimated trajectory and print out any stats here
-    plot_poses(ground_truth_poses, None)
+    plot_poses(ground_truth_poses, estimated_poses)
     print("Feature detection stats: ")
     print(f"Average time to detect features for {feature_algorithm}: {round(np.mean(feature_detection_time), 5)*1000} ms")
     print(f"Average number of features detected for {feature_algorithm}: {int(np.mean(feature_count))}")
@@ -236,7 +325,7 @@ def main():
     kitti_right_images = KITTI_IMAGES_BASE_DIR / f"{sequence_num}/image_1"
 
     kitti_calibration = KITTI_IMAGES_BASE_DIR / f"{sequence_num}/calib.txt"
-    left_intrinsic, right_intrinsic, baseline = load_calibration(kitti_calibration)
+    left_intrinsic, right_intrinsic, baseline, proj_left, proj_right = load_calibration(kitti_calibration)
     print(f"Left intrinsic matrix for sequences {sequence_num}: \n {left_intrinsic} \n")
     print(f"Right intrinsic matrix for sequence {sequence_num}: \n {right_intrinsic} \n")
     print(f"Baseline between left and right camera: {baseline}")
@@ -246,13 +335,16 @@ def main():
     ground_truth = load_ground_truth(kitti_ground_truth)
 
     left_frames = read_frames(kitti_left_images)
-    # right_frames = read_frames(kitti_right_images)
+    right_frames = read_frames(kitti_right_images)
 
     feature_algorithm = "orb"
 
     visual_odometry(
         left_images=left_frames, 
-        right_images=None, 
+        right_images=right_frames, 
+        left_intrinsic=left_intrinsic, 
+        proj_left=proj_left, 
+        proj_right=proj_right,
         ground_truth_poses=ground_truth, 
         feature_algorithm=feature_algorithm
     )
