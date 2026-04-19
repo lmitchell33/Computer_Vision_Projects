@@ -186,7 +186,7 @@ def match_features_optical_flow(prev_frame, curr_frame, prev_features, ):
 
 
 def match_stereo_features(left_frame, right_frame, left_keypoints, left_descriptor, algorithm="orb"):
-    """Match features between left and right images at the same timestep."""
+    #Match features between left and right images at the same timestep.
     right_keypoints, right_descriptor, _ = get_features(right_frame, algorithm)
     _, _, matches, _ = match_features_brute_force(left_descriptor, right_descriptor, algorithm)
 
@@ -216,7 +216,7 @@ def common_matched_features(prev_indices, curr_indices,curr_features,stereo_left
 
 
 def triangulate_points(left_pts, right_pts, proj_left, proj_right):
-    """Triangulate 3D points from stereo correspondences."""
+    #Triangulate 3D points from stereo correspondences.
     # cv2.triangulatePoints expects 2xN arrays
     pts_4d = cv2.triangulatePoints(proj_left, proj_right, left_pts.T, right_pts.T)
 
@@ -229,7 +229,7 @@ def triangulate_points(left_pts, right_pts, proj_left, proj_right):
 
 
 def estimate_pose_pnp(pts_3d, pts_2d, intrinsic_matrix):
-    """Estimate camera pose from 3D-2D correspondences using PnP + RANSAC."""
+    #Estimates camera pose from 3D-2D correspondences using PnP + RANSAC
     success, rvec, tvec, inliers = cv2.solvePnPRansac(
         pts_3d, pts_2d, intrinsic_matrix, 
         distCoeffs=None,
@@ -245,6 +245,65 @@ def estimate_pose_pnp(pts_3d, pts_2d, intrinsic_matrix):
     t = tvec.flatten()
 
     return R, t
+
+def compute_ATE(ground_truth_poses, estimated_poses):
+    #RMSE of translational error
+    errors = []
+    for gt, est in zip(ground_truth_poses, estimated_poses):
+        gt_t = np.array(gt)[:, 3]
+        est_t = np.array(est)[:, 3]
+        error = np.linalg.norm(gt_t - est_t)
+        errors.append(error)
+
+    errors = np.array(errors)
+    rmse = np.sqrt(np.mean(errors ** 2))
+    return rmse, errors
+
+
+def compute_RPE(ground_truth_poses, estimated_poses):
+    """Per-frame relative pose error"""
+    trans_errors = []
+    rot_errors = []
+
+    for i in range(1, len(ground_truth_poses)):
+        # Ground truth relative transform from frame i-1 to i
+        gt_prev = np.eye(4)
+        gt_prev[:3, :] = np.array(ground_truth_poses[i - 1])
+        gt_curr = np.eye(4)
+        gt_curr[:3, :] = np.array(ground_truth_poses[i])
+        gt_rel = np.linalg.inv(gt_prev) @ gt_curr
+
+        # Estimated relative transform from frame i-1 to i
+        est_prev = np.eye(4)
+        est_prev[:3, :] = np.array(estimated_poses[i - 1])
+        est_curr = np.eye(4)
+        est_curr[:3, :] = np.array(estimated_poses[i])
+        est_rel = np.linalg.inv(est_prev) @ est_curr
+
+        # Error transform
+        error_rel = np.linalg.inv(gt_rel) @ est_rel
+
+        # Translation error
+        trans_error = np.linalg.norm(error_rel[:3, 3])
+        trans_errors.append(trans_error)
+
+        # Rotational error
+        R_err = error_rel[:3, :3]
+        trace = np.clip(np.trace(R_err), -1, 3)
+        angle = np.arccos((trace - 1) / 2)
+        rot_errors.append(np.degrees(angle))
+
+    trans_errors = np.array(trans_errors)
+    rot_errors = np.array(rot_errors)
+
+    return {
+        "trans_rmse": np.sqrt(np.mean(trans_errors ** 2)),
+        "trans_mean": np.mean(trans_errors),
+        "rot_rmse": np.sqrt(np.mean(rot_errors ** 2)),
+        "rot_mean": np.mean(rot_errors),
+        "trans_errors": trans_errors,
+        "rot_errors": rot_errors,
+    }
 
 def visual_odometry(left_images, right_images, left_intrinsic, proj_left, proj_right, ground_truth_poses, feature_algorithm="orb"):
     feature_detection_time = []
@@ -305,6 +364,9 @@ def visual_odometry(left_images, right_images, left_intrinsic, proj_left, proj_r
         prev_features = curr_features
         prev_descriptor = curr_descriptor
         prev_frame = curr_frame
+    
+    ate_rmse, ate_errors = compute_ATE(ground_truth_poses, estimated_poses)
+    rpe = compute_RPE(ground_truth_poses, estimated_poses)
 
     # plot the ground truth with estimated trajectory and print out any stats here
     plot_poses(ground_truth_poses, estimated_poses)
@@ -316,6 +378,10 @@ def visual_odometry(left_images, right_images, left_intrinsic, proj_left, proj_r
     print("Feature matching stats: ")
     print(f"Average time to match features for {feature_algorithm}: {round(np.mean(match_time), 5)*1000} ms")
     print(f"Average number of matches for {feature_algorithm}: {int(np.mean(match_count))}")
+
+    print(f"ATE RMSE: {ate_rmse} m")
+    print(f"RPE Translation RMSE: {rpe['trans_rmse']} m")
+    print(f"RPE Rotation RMSE: {rpe['rot_rmse']} deg")
 
 def main():
     # 00, 03, 05, 06, 07, 08, 09, and 10 all have fairly stationary scenes
