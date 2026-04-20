@@ -305,7 +305,10 @@ def compute_RPE(ground_truth_poses, estimated_poses):
         "rot_errors": rot_errors,
     }
 
-def visual_odometry(left_images, right_images, left_intrinsic, proj_left, proj_right, ground_truth_poses, feature_algorithm="orb"):
+
+
+def visual_odometry(left_images, right_images, left_intrinsic, proj_left, proj_right, ground_truth_poses, feature_algorithm="orb",plot_rt=True):
+    
     feature_detection_time = []
     feature_count = []
 
@@ -319,6 +322,26 @@ def visual_odometry(left_images, right_images, left_intrinsic, proj_left, proj_r
     prev_frame = left_images[0]
     feature_detection_time.append(detect_time)
     feature_count.append(len(prev_features))
+    if plot_rt == True:
+        plt.ion()
+        fig, ax = plt.subplots(figsize=(8, 8))
+
+        # Pre-plot the full ground truth
+        x_gt = [p[0][3] for p in ground_truth_poses]
+        z_gt = [p[2][3] for p in ground_truth_poses]
+        ax.plot(x_gt, z_gt, color="blue", alpha=0.5, label="Ground Truth")
+        ax.scatter(x_gt[0], z_gt[0], color="green", marker="o", s=100, label="Start")
+
+        # Initialize the estimated trajectory line (empty for now)
+        est_line, = ax.plot([], [], color="red", label="Estimated")
+        est_marker, = ax.plot([], [], "ro", markersize=8)
+
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Z (m)")
+        ax.set_title("Trajectory")
+        ax.legend()
+        ax.set_aspect("equal")
+        ax.grid(True, alpha=0.3)
 
     for i in range(1, len(left_images)):
         curr_frame = left_images[i]
@@ -361,6 +384,17 @@ def visual_odometry(left_images, right_images, left_intrinsic, proj_left, proj_r
 
 
         # update
+        if plot_rt == True:
+            x_est = [p[0][3] for p in estimated_poses]
+            z_est = [p[2][3] for p in estimated_poses]
+            est_line.set_data(x_est, z_est)
+            est_marker.set_data([x_est[-1]], [z_est[-1]])
+            ax.relim()
+            ax.autoscale_view()
+            ax.set_title(f"Trajectory - Frame {i}")
+            fig.canvas.draw_idle()
+            fig.canvas.flush_events()
+
         prev_features = curr_features
         prev_descriptor = curr_descriptor
         prev_frame = curr_frame
@@ -369,6 +403,10 @@ def visual_odometry(left_images, right_images, left_intrinsic, proj_left, proj_r
     rpe = compute_RPE(ground_truth_poses, estimated_poses)
 
     # plot the ground truth with estimated trajectory and print out any stats here
+    if plot_rt==True:
+        plt.ioff()
+        plt.show()
+
     plot_poses(ground_truth_poses, estimated_poses)
     print("Feature detection stats: ")
     print(f"Average time to detect features for {feature_algorithm}: {round(np.mean(feature_detection_time), 5)*1000} ms")
@@ -404,6 +442,7 @@ def main():
     right_frames = read_frames(kitti_right_images)
 
     feature_algorithm = "orb"
+    plot_in_real_time=True
 
     visual_odometry(
         left_images=left_frames, 
@@ -412,7 +451,8 @@ def main():
         proj_left=proj_left, 
         proj_right=proj_right,
         ground_truth_poses=ground_truth, 
-        feature_algorithm=feature_algorithm
+        feature_algorithm=feature_algorithm,
+        plot_rt=plot_in_real_time
     )
 
 if __name__ == "__main__":
